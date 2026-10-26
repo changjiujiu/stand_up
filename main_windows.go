@@ -5,7 +5,7 @@
 package main
 
 import (
-	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -191,40 +191,16 @@ const (
 	popupClass = "EliStandUpPopup"
 )
 
-// 配色（COLORREF = 0x00BBGGRR）
-var (
-	colBg          = rgb(0xFF, 0xFF, 0xFF)
-	colBorder      = rgb(0xE3, 0xE6, 0xE8)
-	colAccent      = rgb(0x1F, 0x8A, 0x70)
-	colAccentHover = rgb(0x17, 0x6E, 0x59)
-	colSecondary   = rgb(0xF1, 0xF3, 0xF4)
-	colSecondaryHv = rgb(0xE2, 0xE6, 0xE8)
-	colTitle       = rgb(0x1F, 0x23, 0x28)
-	colBody        = rgb(0x5A, 0x62, 0x6B)
-	colOnAccent    = rgb(0xFF, 0xFF, 0xFF)
-	colOnSecondary = rgb(0x33, 0x3A, 0x40)
-)
-
 var (
 	hInstance uintptr
 	hostHwnd  uintptr
-	popupHwnd uintptr
 	dpi       int32 = 96
-
-	fontTitle, fontBody, fontButton, fontSmall, fontSection uintptr
 
 	cfg     Config
 	tracker *Tracker
 	exePath string
 	iniPath string
-
-	btnRects     [3]rect // 0 = 去活动（主按钮），1 = 稍后提醒，2 = 右上角“设置”
-	hoverBtn     = -1
-	mouseTracked bool
-	popupMinutes int
 )
-
-func rgb(r, g, b byte) uint32 { return uint32(r) | uint32(g)<<8 | uint32(b)<<16 }
 
 func u16(s string) *uint16 {
 	p, err := syscall.UTF16PtrFromString(s)
@@ -233,9 +209,6 @@ func u16(s string) *uint16 {
 	}
 	return p
 }
-
-// sc 把 96 DPI 下的逻辑像素换算为物理像素
-func sc(v int32) int32 { return v * dpi / 96 }
 
 func msgBox(text string, flags uintptr) uintptr {
 	r, _, _ := pMessageBoxW.Call(0, uintptr(unsafe.Pointer(u16(text))), uintptr(unsafe.Pointer(u16(appTitle))), flags|mbTopmost)
@@ -283,7 +256,7 @@ func main() {
 	hInstance, _, _ = pGetModuleHandleW.Call(0)
 	loadIcons()
 	registerClass(hostClass, hostProc, 0)
-	registerClass(popupClass, popupProc, csDropShadow)
+	registerClass(popupClass, popupProc, 0)
 	registerClass(settingsClass, settingsProc, 0)
 	hostHwnd, _, _ = pCreateWindowExW.Call(0, uintptr(unsafe.Pointer(u16(hostClass))), uintptr(unsafe.Pointer(u16(appTitle))),
 		0, 0, 0, 0, 0, 0, 0, hInstance, 0) // 隐藏宿主窗口：承载定时器，并供“再次运行退出”查找
@@ -341,15 +314,16 @@ func initDPIAndFonts() {
 		}
 		pReleaseDC.Call(0, hdc)
 	}
-	fontTitle = makeFont(20, 700)
-	fontBody = makeFont(14, 400)
-	fontButton = makeFont(14, 600)
-	fontSmall = makeFont(13, 400)
-	fontSection = makeFont(15, 700)
+	fonts[FontTitle] = makeFont(20, 700)
+	fonts[FontBody] = makeFont(14, 400)
+	fonts[FontButton] = makeFont(14, 600)
+	fonts[FontSmall] = makeFont(13, 400)
+	fonts[FontSection] = makeFont(15, 700)
+	fonts[FontCaption] = makeFont(12, 600)
 }
 
 func makeFont(px, weight int32) uintptr {
-	h, _, _ := pCreateFontW.Call(uintptr(-sc(px)), 0, 0, 0, uintptr(weight), 0, 0, 0,
+	h, _, _ := pCreateFontW.Call(uintptr(-int32(math.Round(scale().F(float64(px))))), 0, 0, 0, uintptr(weight), 0, 0, 0,
 		1 /*DEFAULT_CHARSET*/, 0, 0, 5 /*CLEARTYPE_QUALITY*/, 0, uintptr(unsafe.Pointer(u16("Microsoft YaHei UI"))))
 	return h
 }
@@ -373,12 +347,12 @@ func onTick() {
 	}()
 	switch tracker.Tick(now, idleDuration()) {
 	case ActShow:
-		showPopup(int(tracker.ActiveFor(now).Minutes()))
-		if popupHwnd == 0 {
+		ok := showPopup(PopupSpec{Minutes: int(tracker.ActiveFor(now).Minutes()), SnoozeMin: int(cfg.Snooze.Minutes())}, cfg.Position, cfg.Sound)
+		if !ok {
 			tracker.Snooze(now) // 窗口创建失败：别卡在“已弹出”状态，稍后重试
 		}
 	case ActAutoDismiss:
-		if popupHwnd != 0 {
+		if popupHwnd != 0 && !popupPreview { // 预览弹窗不受“人已离开”影响
 			pDestroyWindow.Call(popupHwnd)
 		}
 	}
@@ -412,196 +386,10 @@ func hostProc(hwnd, msg, wp, lp uintptr) uintptr {
 	return r
 }
 
-// ---------------- 提醒弹窗 ----------------
-
-func showPopup(minutes int) {
-	if popupHwnd != 0 {
-		return
-	}
-	popupMinutes, hoverBtn, mouseTracked = minutes, -1, false
-	w, h := sc(400), sc(196)
-
-	var wa rect
-	pSystemParametersInfoW.Call(spiWorkAre, 0, uintptr(unsafe.Pointer(&wa)), 0)
-	x, y := wa.Right-w-sc(20), wa.Bottom-h-sc(20)
-	if cfg.Position == "center" {
-		x, y = wa.Left+(wa.Right-wa.Left-w)/2, wa.Top+(wa.Bottom-wa.Top-h)/2
-	}
-
-	popupHwnd, _, _ = pCreateWindowExW.Call(wsExTopmost|wsExToolWindow,
-		uintptr(unsafe.Pointer(u16(popupClass))), uintptr(unsafe.Pointer(u16(appTitle))),
-		wsPopup, uintptr(x), uintptr(y), uintptr(w), uintptr(h), 0, 0, hInstance, 0)
-	if popupHwnd == 0 {
-		return
-	}
-
-	// Win11 圆角；Win10 上调用失败直接忽略
-	if pDwmSetWindowAttribute.Find() == nil {
-		pref := uint32(2) // DWMWCP_ROUND
-		pDwmSetWindowAttribute.Call(popupHwnd, 33 /*DWMWA_WINDOW_CORNER_PREFERENCE*/, uintptr(unsafe.Pointer(&pref)), 4)
-	}
-
-	bw, bh, gap, right := sc(132), sc(36), sc(12), w-sc(24)
-	top := h - sc(24) - bh
-	btnRects[0] = rect{right - bw, top, right, top + bh}
-	btnRects[1] = rect{right - 2*bw - gap, top, right - bw - gap, top + bh}
-	btnRects[2] = rect{w - sc(64), sc(22), w - sc(20), sc(46)}
-
-	pShowWindow.Call(popupHwnd, swShowNoActive) // 不抢焦点：正在打字不会被打断
-	if cfg.Sound {
-		pMessageBeep.Call(mbIconInfo)
-	}
-}
-
-func hitButton(x, y int32) int {
-	for i, r := range btnRects {
-		if x >= r.Left && x < r.Right && y >= r.Top && y < r.Bottom {
-			return i
-		}
-	}
-	return -1
-}
+// ---------------- 工具 ----------------
 
 func lpPoint(lp uintptr) (int32, int32) {
 	return int32(int16(lp & 0xFFFF)), int32(int16((lp >> 16) & 0xFFFF))
-}
-
-func popupProc(hwnd, msg, wp, lp uintptr) uintptr {
-	switch msg {
-	case wmEraseBkgnd:
-		return 1 // 由 WM_PAINT 双缓冲整体绘制，避免闪烁
-	case wmPaint:
-		paintPopup(hwnd)
-		return 0
-	case wmNcHitTest:
-		x, y := lpPoint(lp)
-		pt := point{x, y}
-		pScreenToClient.Call(hwnd, uintptr(unsafe.Pointer(&pt)))
-		if hitButton(pt.X, pt.Y) >= 0 {
-			return htClient
-		}
-		return htCaption // 按钮以外区域可拖动
-	case wmSetCursor:
-		if lp&0xFFFF == htClient {
-			c, _, _ := pLoadCursorW.Call(0, idcHand)
-			pSetCursor.Call(c)
-			return 1
-		}
-	case wmMouseMove:
-		if !mouseTracked {
-			tme := trackMouseEvent{DwFlags: tmeLeave, HwndTrack: hwnd}
-			tme.CbSize = uint32(unsafe.Sizeof(tme))
-			pTrackMouseEvent.Call(uintptr(unsafe.Pointer(&tme)))
-			mouseTracked = true
-		}
-		if i := hitButton(lpPoint(lp)); i != hoverBtn {
-			hoverBtn = i
-			pInvalidateRect.Call(hwnd, 0, 0)
-		}
-		return 0
-	case wmMouseLeave:
-		mouseTracked, hoverBtn = false, -1
-		pInvalidateRect.Call(hwnd, 0, 0)
-		return 0
-	case wmLButtonUp:
-		switch hitButton(lpPoint(lp)) {
-		case 0:
-			tracker.Done(time.Now())
-			pDestroyWindow.Call(hwnd)
-		case 1:
-			tracker.Snooze(time.Now())
-			pDestroyWindow.Call(hwnd)
-		case 2:
-			showSettings() // 弹窗保留，改完设置再决定
-		}
-		return 0
-	case wmDestroy:
-		popupHwnd = 0
-		return 0
-	}
-	r, _, _ := pDefWindowProcW.Call(hwnd, msg, wp, lp)
-	return r
-}
-
-// ---------------- 绘制 ----------------
-
-func paintPopup(hwnd uintptr) {
-	var ps paintStruct
-	hdc, _, _ := pBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
-	defer pEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
-
-	var rc rect
-	pGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
-	w, h := rc.Right, rc.Bottom
-
-	// 双缓冲
-	mem, _, _ := pCreateCompatibleDC.Call(hdc)
-	bmp, _, _ := pCreateCompatibleBitmap.Call(hdc, uintptr(w), uintptr(h))
-	oldBmp, _, _ := pSelectObject.Call(mem, bmp)
-	defer func() {
-		pSelectObject.Call(mem, oldBmp)
-		pDeleteObject.Call(bmp)
-		pDeleteDC.Call(mem)
-	}()
-
-	fill(mem, rc, colBg, false)
-	fill(mem, rc, colBorder, true)
-	fill(mem, rect{0, 0, sc(6), h}, colAccent, false) // 左侧强调色条
-	pSetBkMode.Call(mem, 1 /*TRANSPARENT*/)
-
-	drawText(mem, fontTitle, colTitle, "该起来活动一下了",
-		rect{sc(28), sc(22), w - sc(72), sc(52)}, dtLeft|dtSingleLine|dtVCenter|dtNoPrefix)
-	drawText(mem, fontBody, colBody,
-		fmt.Sprintf("你已连续使用电脑 %d 分钟。\n站起来走走，喝口水，看看远处。", popupMinutes),
-		rect{sc(28), sc(60), w - sc(24), sc(116)}, dtLeft|dtWordBreak|dtNoPrefix)
-
-	labels := [2]string{"好，去活动", fmt.Sprintf("%d 分钟后提醒", int(cfg.Snooze.Minutes()))}
-	linkColor := colBody
-	if hoverBtn == 2 {
-		linkColor = colAccent
-	}
-	drawText(mem, fontSmall, linkColor, "设置", btnRects[2], dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
-
-	for i, r := range btnRects[:2] {
-		bg, fg := colSecondary, colOnSecondary
-		if i == 0 {
-			bg, fg = colAccent, colOnAccent
-		}
-		if i == hoverBtn {
-			if i == 0 {
-				bg = colAccentHover
-			} else {
-				bg = colSecondaryHv
-			}
-		}
-		roundRect(mem, r, bg, sc(8))
-		drawText(mem, fontButton, fg, labels[i], r, dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
-	}
-
-	pBitBlt.Call(hdc, 0, 0, uintptr(w), uintptr(h), mem, 0, 0, srcCopy)
-}
-
-// fill 填充矩形；frame=true 时只画 1px 边框
-func fill(dc uintptr, r rect, color uint32, frame bool) {
-	brush, _, _ := pCreateSolidBrush.Call(uintptr(color))
-	if frame {
-		pFrameRect.Call(dc, uintptr(unsafe.Pointer(&r)), brush)
-	} else {
-		pFillRect.Call(dc, uintptr(unsafe.Pointer(&r)), brush)
-	}
-	pDeleteObject.Call(brush)
-}
-
-func roundRect(dc uintptr, r rect, color uint32, radius int32) {
-	brush, _, _ := pCreateSolidBrush.Call(uintptr(color))
-	pen, _, _ := pGetStockObject.Call(nullPen)
-	oldBrush, _, _ := pSelectObject.Call(dc, brush)
-	oldPen, _, _ := pSelectObject.Call(dc, pen)
-	// 空画笔会让图形收缩 1px，右下各补 1
-	pRoundRect.Call(dc, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right+1), uintptr(r.Bottom+1), uintptr(radius), uintptr(radius))
-	pSelectObject.Call(dc, oldPen)
-	pSelectObject.Call(dc, oldBrush)
-	pDeleteObject.Call(brush)
 }
 
 func drawText(dc, font uintptr, color uint32, text string, r rect, flags uintptr) {

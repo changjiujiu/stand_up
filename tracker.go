@@ -7,7 +7,7 @@ type Config struct {
 	Work      time.Duration // 连续活跃多久后提醒
 	IdleReset time.Duration // 无键鼠操作多久视为已休息
 	Snooze    time.Duration // “稍后提醒”的延迟
-	Position  string        // corner | center
+	Position  string        // top_left | top_right | bottom_left | bottom_right | center
 	Sound     bool          // 弹出时提示音
 	Autostart bool          // 开机自启
 	Tray      bool          // 显示任务栏托盘图标
@@ -19,7 +19,7 @@ func DefaultConfig() Config {
 		Work:      50 * time.Minute,
 		IdleReset: 5 * time.Minute,
 		Snooze:    5 * time.Minute,
-		Position:  "corner",
+		Position:  "bottom_right",
 		Sound:     true,
 		Tray:      true,
 	}

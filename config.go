@@ -32,7 +32,8 @@ idle_reset_minutes = %d
 ; 点“稍后提醒”后延迟多少分钟（%d-%d）
 snooze_minutes = %d
 
-; 弹窗位置：corner = 右下角，center = 屏幕中央
+; 弹窗位置：top_left = 左上角，top_right = 右上角，bottom_left = 左下角，
+;           bottom_right = 右下角，center = 屏幕中央
 position = %s
 
 ; 弹出时是否提示音：true / false
@@ -90,10 +91,10 @@ func LoadConfig(path string) (Config, []string, bool, error) {
 		case "snooze_minutes":
 			setMinutes(&cfg.Snooze, key, val, snoozeMin, snoozeMax, &warns)
 		case "position":
-			if val == "corner" || val == "center" {
-				cfg.Position = val
+			if p, ok := NormalizePosition(val); ok { // 兼容 v1 的 corner
+				cfg.Position = p
 			} else {
-				warns = append(warns, fmt.Sprintf("position=%s 无效，已用默认 corner", val))
+				warns = append(warns, fmt.Sprintf("position=%s 无效，已用默认 bottom_right", val))
 			}
 		case "sound":
 			setBool(&cfg.Sound, key, val, &warns)
