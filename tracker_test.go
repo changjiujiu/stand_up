@@ -183,3 +183,50 @@ func TestUpdateConfig(t *testing.T) {
 		t.Fatalf("改间隔后应在 20 分钟弹出，实际 %v", at2.Sub(t0))
 	}
 }
+
+func TestPauseSuppressesPopup(t *testing.T) {
+	tr := NewTracker(testCfg(), t0)
+	tr.Pause(t0, 0) // 直到手动恢复
+	if _, ok := runUntil(tr, t0.Add(15*time.Second), t0.Add(5*time.Hour), 0, ActShow); ok {
+		t.Fatal("暂停期间不应弹出")
+	}
+	if !tr.IsPaused() {
+		t.Fatal("手动暂停不应自行到期")
+	}
+	if _, ok := tr.PauseUntil(); ok {
+		t.Fatal("手动暂停不应有截止时间")
+	}
+}
+
+func TestPauseExpiresThenFullCycle(t *testing.T) {
+	tr := NewTracker(testCfg(), t0)
+	tr.Pause(t0, 30*time.Minute)
+	at, ok := runUntil(tr, t0.Add(15*time.Second), t0.Add(3*time.Hour), 0, ActShow)
+	// 30 分钟时自动恢复并重新计时，再满 50 分钟才弹出
+	if !ok || at.Sub(t0) != 80*time.Minute {
+		t.Fatalf("暂停结束后应重新计满 50 分钟（共 80 分钟），实际 %v ok=%v", at.Sub(t0), ok)
+	}
+	if tr.IsPaused() {
+		t.Fatal("到期后应已恢复")
+	}
+}
+
+func TestResumeRestartsTimer(t *testing.T) {
+	tr := NewTracker(testCfg(), t0)
+	tr.Pause(t0.Add(10*time.Minute), 0)
+	runUntil(tr, t0.Add(10*time.Minute+15*time.Second), t0.Add(3*time.Hour), 0, -1)
+	resume := t0.Add(3 * time.Hour)
+	tr.Resume(resume)
+	at, ok := runUntil(tr, resume.Add(15*time.Second), resume.Add(2*time.Hour), 0, ActShow)
+	if !ok || at.Sub(resume) != 50*time.Minute {
+		t.Fatalf("手动恢复后应重新计满 50 分钟，实际 %v ok=%v", at.Sub(resume), ok)
+	}
+}
+
+func TestPauseUntilReported(t *testing.T) {
+	tr := NewTracker(testCfg(), t0)
+	tr.Pause(t0, time.Hour)
+	if until, ok := tr.PauseUntil(); !ok || until.Sub(t0) != time.Hour {
+		t.Fatalf("应报告 1 小时后到期，实际 %v ok=%v", until.Sub(t0), ok)
+	}
+}

@@ -344,6 +344,7 @@ func onTick() {
 	defer func() {
 		traySync() // 开机时 Explorer 未就绪导致添加失败的，在这里重试
 		trayUpdateTip()
+		syncPauseUI() // 暂停到期自动恢复后，设置窗口同步刷新
 	}()
 	switch tracker.Tick(now, idleDuration()) {
 	case ActShow:

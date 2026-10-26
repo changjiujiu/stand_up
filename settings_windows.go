@@ -61,6 +61,10 @@ func showSettings() {
 	s := scale()
 	settingsLay = NewSettingsLayout(s)
 	setState = SettingsState{Pos: cfg.Position, Sound: cfg.Sound, Auto: cfg.Autostart, Tray: cfg.Tray, Hover: HitNone, Focus: -1}
+	setState.Paused = tracker.IsPaused()
+	if setState.Paused {
+		setState.PauseNote = pauseNote()
+	}
 	setTracked = false
 
 	style := uintptr(wsCaption | wsSysMenu | wsMinimizeBox | wsClipChildren)
@@ -239,6 +243,8 @@ func settingsProc(hwnd, msg, wp, lp uintptr) uintptr {
 			renderSettings()
 		case hit == HitPreview:
 			previewPopup(setState.Pos, snoozeInput(), setState.Sound)
+		case hit == HitPause:
+			pauseButton(hwnd)
 		case hit == HitSave:
 			saveSettings()
 		case hit == HitCancel:

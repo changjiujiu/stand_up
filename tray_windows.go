@@ -117,6 +117,9 @@ func trayUpdateTip() {
 }
 
 func trayTipText() string {
+	if tracker != nil && tracker.IsPaused() {
+		return appTitle + " · " + pauseNote()
+	}
 	if tracker == nil || tracker.IsAway() {
 		return appTitle + " · 休息中"
 	}
@@ -132,6 +135,8 @@ func trayRemove() {
 
 func trayMenu() {
 	menu, _, _ := pCreatePopupMenu.Call()
+	appendPauseItems(menu)
+	pAppendMenuW.Call(menu, mfSeparator, 0, 0)
 	pAppendMenuW.Call(menu, mfString, menuSettings, uintptr(unsafe.Pointer(u16("设置…"))))
 	pAppendMenuW.Call(menu, mfSeparator, 0, 0)
 	pAppendMenuW.Call(menu, mfString, menuQuit, uintptr(unsafe.Pointer(u16("退出"))))
@@ -150,6 +155,8 @@ func trayMenu() {
 		showSettings()
 	case menuQuit:
 		pDestroyWindow.Call(hostHwnd)
+	default:
+		handlePauseCmd(cmd)
 	}
 }
 

@@ -287,7 +287,8 @@ const (
 	HitSave    = 9
 	HitCancel  = 10
 	HitQuit    = 11
-	HitCount   = 12
+	HitPause   = 12 // 页头右侧“暂停提醒 / 开启提醒”
+	HitCount   = 13
 )
 
 type SettingsState struct {
@@ -296,6 +297,8 @@ type SettingsState struct {
 	Hover             int // HitXxx
 	Focus             int // 获得焦点的输入框下标，-1 表示无
 	Err               string
+	Paused            bool   // 提醒是否处于暂停
+	PauseNote         string // 暂停说明，如“已暂停，15:30 自动恢复”
 }
 
 // SettingsLayout 设置窗口布局（物理像素浮点矩形）
@@ -348,6 +351,7 @@ func NewSettingsLayout(s Scale) SettingsLayout {
 	l.Regions[HitSave] = f(settingsW-24-104, 424, 104, 40)
 	l.Regions[HitCancel] = f(settingsW-24-104-12-96, 424, 96, 40)
 	l.Regions[HitQuit] = f(24, 424, 88, 40)
+	l.Regions[HitPause] = f(settingsW-24-124, 26, 124, 34)
 	return l
 }
 
@@ -393,13 +397,33 @@ func DrawSettings(cv *Canvas, s Scale, st SettingsState) []TextRun {
 	f := func(x, y, w, h float64) FRect { return FRect{s.F(x), s.F(y), s.F(w), s.F(h)} }
 	cv.Clear(colWindow)
 	var runs []TextRun
+	subtitle, subtitleCol := "连续使用满设定时间后，提醒你起身活动", colMuted
+	if st.Paused {
+		subtitle, subtitleCol = st.PauseNote, colAccent
+	}
 
 	// 页头
 	cv.FillRoundRect(s.F(24), s.F(20), s.F(44), s.F(44), s.F(12), colAccent)
 	cv.DrawFigure(s.F(24+7), s.F(20+7), s.F(30), colWhite)
 	runs = append(runs,
 		run("久坐提醒", FontTitle, colTitle, f(80, 18, 300, 28), AlignLeft, false),
-		run("连续使用满设定时间后，提醒你起身活动", FontSmall, colMuted, f(80, 46, 400, 20), AlignLeft, false))
+		run(subtitle, FontSmall, subtitleCol, f(80, 46, 440, 20), AlignLeft, false))
+
+	// 页头右侧：暂停 / 恢复
+	pause := l.Regions[HitPause]
+	pauseBg, pauseFg, pauseText := colSecondary, colOnSecondary, "暂停提醒"
+	if st.Paused {
+		pauseBg, pauseFg, pauseText = colAccent, colWhite, "开启提醒"
+	}
+	if st.Hover == HitPause {
+		if st.Paused {
+			pauseBg = colAccentHover
+		} else {
+			pauseBg = colSecondaryHv
+		}
+	}
+	drawButton(cv, s, pause, pauseBg)
+	runs = append(runs, run(pauseText, FontButton, pauseFg, pause, AlignCenter, false))
 
 	// 三张卡片 + 小标题
 	card := func(x, y, w, h float64, title string) {

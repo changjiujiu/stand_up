@@ -42,6 +42,8 @@ type Tracker struct {
 	lastTick    time.Time // 上次轮询时间（用于识别睡眠/休眠造成的空档）
 	away        bool      // 当前是否处于“已离开”状态
 	popup       bool      // 弹窗是否打开
+	paused      bool      // 是否处于“暂停提醒”
+	pauseUntil  time.Time // 暂停截止时间；零值表示直到手动恢复
 }
 
 func NewTracker(cfg Config, now time.Time) *Tracker {
@@ -50,6 +52,13 @@ func NewTracker(cfg Config, now time.Time) *Tracker {
 
 // Tick 每次轮询调用；idle 为距上次键鼠输入的时长
 func (t *Tracker) Tick(now time.Time, idle time.Duration) Action {
+	if t.paused {
+		t.lastTick = now // 暂停期间照常刷新，避免恢复后被误判为“睡眠空档”
+		if !t.pauseUntil.IsZero() && !now.Before(t.pauseUntil) {
+			t.Resume(now) // 到期自动恢复
+		}
+		return ActNone
+	}
 	// 两次轮询间隔超过阈值：说明机器睡眠/休眠过，视同离开
 	gap := now.Sub(t.lastTick)
 	t.lastTick = now
@@ -93,6 +102,30 @@ func (t *Tracker) Done(now time.Time) {
 func (t *Tracker) Snooze(now time.Time) {
 	t.popup = false
 	t.nextDue = now.Add(t.cfg.Snooze)
+}
+
+// Pause 暂停提醒；d<=0 表示直到手动恢复。暂停时若弹窗开着，调用方负责关闭窗口
+func (t *Tracker) Pause(now time.Time, d time.Duration) {
+	t.paused, t.popup, t.lastTick = true, false, now
+	t.pauseUntil = time.Time{}
+	if d > 0 {
+		t.pauseUntil = now.Add(d)
+	}
+}
+
+// Resume 恢复提醒并重新计满一个完整周期（演示本身也算工作时间）
+func (t *Tracker) Resume(now time.Time) {
+	t.paused, t.away, t.popup, t.lastTick = false, false, false, now
+	t.pauseUntil = time.Time{}
+	t.activeStart, t.nextDue = now, now.Add(t.cfg.Work)
+}
+
+// IsPaused 是否处于暂停状态
+func (t *Tracker) IsPaused() bool { return t.paused }
+
+// PauseUntil 暂停的截止时间；ok=false 表示没有截止时间（直到手动恢复）
+func (t *Tracker) PauseUntil() (until time.Time, ok bool) {
+	return t.pauseUntil, !t.pauseUntil.IsZero()
 }
 
 // UpdateConfig 设置界面保存后热更新。

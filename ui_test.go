@@ -176,7 +176,7 @@ func TestDrawSettingsRuns(t *testing.T) {
 		}
 	}
 	joined := strings.Join(all, "|")
-	for _, want := range []string{"久坐提醒", "提醒规则", "右上角", "预览效果", "保存", "取消", "退出程序", "开机自启", "任务栏图标", "提示音"} {
+	for _, want := range []string{"久坐提醒", "提醒规则", "右上角", "预览效果", "保存", "取消", "退出程序", "开机自启", "任务栏图标", "提示音", "暂停提醒"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("设置窗口缺少文案 %q", want)
 		}
@@ -237,5 +237,22 @@ func TestWritePreviews(t *testing.T) {
 		sl := NewSettingsLayout(s)
 		cv = NewCanvas(sl.W, sl.H)
 		write("settings"+suffix, cv, DrawSettings(cv, s, SettingsState{Pos: "bottom_right", Sound: true, Tray: true, Hover: HitPosBase + 1, Focus: 0}))
+	}
+}
+
+func TestDrawSettingsPaused(t *testing.T) {
+	s := Scale{96}
+	l := NewSettingsLayout(s)
+	st := SettingsState{Pos: "bottom_right", Hover: HitNone, Focus: -1, Paused: true, PauseNote: "已暂停，15:30 自动恢复"}
+	var all []string
+	for _, r := range DrawSettings(NewCanvas(l.W, l.H), s, st) {
+		all = append(all, r.Text)
+	}
+	joined := strings.Join(all, "|")
+	if !strings.Contains(joined, "开启提醒") || strings.Contains(joined, "暂停提醒") {
+		t.Errorf("已暂停时按钮应为“开启提醒”：%s", joined)
+	}
+	if !strings.Contains(joined, "已暂停，15:30 自动恢复") || strings.Contains(joined, "连续使用满设定时间后") {
+		t.Errorf("已暂停时页头应显示暂停说明：%s", joined)
 	}
 }
